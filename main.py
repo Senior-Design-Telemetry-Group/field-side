@@ -18,12 +18,14 @@ fieldUnits = {
     "Speed": "MPH",
     "Slope": "°",
     "Throttle": "%",
+    "BV": "V"
 }
 
 # Not configurable.
 timeOptionLabels = ["1s", "5s", "10s", "15s", "30s", "1m", "5m", "10m", "30m"]
 timeOptionMS = [1000, 5000, 10000, 15000, 30000, 60000, 60000*5, 60000*10, 60000*30]
 
+activePopup = None
 
 def getPacketLimit(option):
     """Get packet # limit when given a selected timeOptionLabel
@@ -124,6 +126,7 @@ class TimeFrameSelector(ttk.Combobox):
 
 class GraphSettingsPopup(tk.Tk):
     def __init__(self, graph):
+        global activePopup
         tk.Tk.__init__(self)
         self.exitValue = None
         mf = tk.Frame(self)
@@ -136,10 +139,15 @@ class GraphSettingsPopup(tk.Tk):
         tk.Button(self, text="Save", command=self.__saveButton).grid(column=0,row=1)
         tk.Button(self, text="Cancel", command=self.__quitButton).grid(column=1,row=1)
 
-        self.time = timeCombobox = TimeFrameSelector(self, settings["limit"])
+        self.time = timeCombobox = TimeFrameSelector(self, settings["limit"] or "30m")
         timeCombobox.grid(column=1,row=0)
         self.grab_set()
+        if activePopup:
+            activePopup.destroy()
+            activePopup = None
+        activePopup = self
     def __saveButton(self):
+        print(self)
         settings = {
             "fields": self.fs.getSelected(),
             "limit": self.time.getLimit()
@@ -149,7 +157,6 @@ class GraphSettingsPopup(tk.Tk):
         self.destroy()
     def __quitButton(self):
         self.destroy()
-
 
 class StatGraph(tk.Frame):
     def __init__(self, parent, buffer):
@@ -206,6 +213,51 @@ class StatGraph(tk.Frame):
             self.setFields(settings["fields"])
             self.setBufferLimit(settings["limit"])
 
+class StatGraphContainer(tk.Frame):
+    def __init__(self, parent):
+        tk.Frame.__init__(self, parent)
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
+        self.graphs = []
+        self.graphFrame = tk.Frame(self)
+        self.graphFrame.grid(column=0,row=0,columnspan=2)
+        self.graphFrame.rowconfigure(0, weight=1)
+
+        buttonFrame = tk.Frame(self)
+        buttonFrame.grid(column=0,row=1,sticky=(tk.E))
+        buttonFrame.rowconfigure(0, weight=1)
+        tk.Button(buttonFrame, text="Add", command=self.addGraph).grid(column=1,row=0)
+        tk.Button(buttonFrame, text="Remove", command=self.removeGraph).grid(column=0,row=0)
+        self.addGraph()
+
+    def addGraph(self):
+        # This is so janky
+        # But if we only append a new graph it will be a different size than the rest of the graphs
+        # So instead remove all existing graphs, and recreate them.
+        gBackup = self.graphs
+        self.graphs = []
+        for i, g in enumerate(gBackup):
+            settings = g.getSettings()
+            g.destroy()
+            graph = StatGraph(self.graphFrame, mainBuffer)
+            graph.grid(column=i,row=0,sticky=(tk.N,tk.W,tk.E,tk.S))
+            graph.setSettings(settings)
+            self.graphFrame.columnconfigure(i, weight=1)
+            self.graphs.append(graph)
+        idx = len(self.graphs)
+        graph = StatGraph(self.graphFrame, mainBuffer)
+        graph.grid(column=idx,row=0,sticky=(tk.N,tk.W,tk.E,tk.S))
+        self.graphFrame.columnconfigure(idx, weight=1)
+        self.graphs.append(graph)
+    
+    def removeGraph(self):
+        idx = len(self.graphs)
+        graph = self.graphs.pop()
+        graph.destroy()
+    
+    def draw(self):
+        for _, graph in enumerate(self.graphs):
+            graph.draw()
 
 class StatOverview(tk.Frame):
     def __init__(self, parent, buffer, key):
@@ -249,7 +301,6 @@ class StatOverview(tk.Frame):
         self.avgVar.set('({:9.2f})'.format(self.buffer.getAvg(self.key) or 0))
         self.maxVar.set(fstr.format(self.buffer.getMax(self.key) or 0))
 
-
 class StatOverviewContainer(tk.Frame):
     def __init__(self, parent, buffer):
         tk.Frame.__init__(self, parent)
@@ -257,7 +308,7 @@ class StatOverviewContainer(tk.Frame):
         self.rowconfigure(0,weight=1)
         for i, field in enumerate(expectedFields):
             gs = StatOverview(self, buffer, field)
-            gs.grid(column=i,row=0,sticky=(tk.N,tk.E,tk.W,tk.S))
+            gs.grid(column=math.floor(i/2),row=i%2,sticky=(tk.N,tk.E,tk.W,tk.S))
             self.statViews.append(gs)
         
     def draw(self):
@@ -266,40 +317,32 @@ class StatOverviewContainer(tk.Frame):
 
 root = tk.Tk()
 
-buffer = RollingBuffer(getPacketLimit("30m"))
+mainBuffer = RollingBuffer(getPacketLimit("30m"))
 for i in range(0, 100):
-    buffer.add({"RPM":i, "Speed": 100-i})
+    mainBuffer.add({"RPM":i, "Speed": 100-i})
 
-buffer.add({})
+mainBuffer.add({})
 root.columnconfigure(0, weight=1)
 root.rowconfigure(0,weight=1)
+mainFrame = tk.Frame(root)
 
-graphFrame = tk.Frame(root)
-graphFrame.grid(column=0,row=0)
-graphFrame.columnconfigure(0, weight=1)
-graphFrame.columnconfigure(1, weight=1)
-graphFrame.rowconfigure(0,weight=1)
+mainFrame.grid(column=0,row=0)
+mainFrame.columnconfigure(0, weight=1)
+mainFrame.columnconfigure(1, weight=1)
+mainFrame.rowconfigure(0,weight=1)
 
-gg = StatGraph(graphFrame, buffer)
-gg.grid(column=0,row=0)
-gg.setFields(["Speed"])
-gg.setBufferLimit("1s")
-gg2 = StatGraph(graphFrame, buffer)
-gg2.grid(column=1,row=0)
-gg2.setFields(["Speed"])
-gg2.setBufferLimit("5s")
-
-so = StatOverviewContainer(root, buffer)
+graphContainer = StatGraphContainer(mainFrame)
+graphContainer.grid(column=0,row=0)
+so = StatOverviewContainer(mainFrame, mainBuffer)
 so.grid(column=0,row=1)
 
 i = 0
 
 def test():
     global i
-    buffer.add({"RPM": 1800 * abs(math.sin(i / 10)), "Speed": 30 * abs(math.cos(i / 30)), "Slope": 10 * random.random()})
+    mainBuffer.add({"RPM": 1800 * abs(math.sin(i / 10)), "Speed": 30 * abs(math.cos(i / 30)), "Slope": 10 * random.random()})
     i+= 1
-    gg.draw()
-    gg2.draw()
+    graphContainer.draw()
     so.draw()
     root.after(expectedPacketDelay, test)
 
