@@ -2,14 +2,17 @@ import matplotlib
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 import tkinter as tk
+from tkinter import filedialog
 from tkinter import ttk 
 import math
 import random
+import re
+import json
 
 matplotlib.use("TkAgg")
 
 # Configurable Settings
-expectedPacketDelay = 100
+expectedPacketDelay = 200
 
 expectedFields = ["FUEL", "RPM", "Speed", "Slope", "BV", "Throttle", "OXY", "INJ"]
 fieldUnits = {
@@ -21,9 +24,12 @@ fieldUnits = {
     "BV": "V"
 }
 
+
 # Not configurable.
 timeOptionLabels = ["1s", "5s", "10s", "15s", "30s", "1m", "5m", "10m", "30m"]
 timeOptionMS = [1000, 5000, 10000, 15000, 30000, 60000, 60000*5, 60000*10, 60000*30]
+maxBufferLength = 60000 * 60 / expectedPacketDelay
+displayRefreshDelay = 200
 
 activePopup = None
 
@@ -118,7 +124,7 @@ class FieldSelectionFrame(tk.Frame):
 
 class TimeFrameSelector(ttk.Combobox):
     def __init__(self, parent, current):
-        ttk.Combobox.__init__(self, parent, state="readonly", values=timeOptionLabels)
+        ttk.Combobox.__init__(self, parent, state="readonly", values=timeOptionLabels, width=5)
         self.set(current)
 
     def getLimit(self):
@@ -163,23 +169,21 @@ class StatGraph(tk.Frame):
         tk.Frame.__init__(self, parent)
         self["borderwidth"] = 2
         self["relief"] = "raised"
-        label = tk.Label(self, text="Graph Page!")
-        label.grid(column=0,row=0)
 
-        f = Figure(figsize=(5,5), dpi=100)
+        f = Figure(layout="tight")
         subplot = f.add_subplot(111)
         self.subplot = subplot
         self.buffer = buffer
         self.fields = []
         self.limit = None
-
-        self.canvas = FigureCanvasTkAgg(f, self)
-        self.canvas.get_tk_widget().grid(column=0,row=1,sticky=(tk.N,tk.W,tk.E,tk.S))
-        self.rowconfigure(1, weight=1)
+        self.rowconfigure(0, weight=1)
         self.columnconfigure(0, weight=1)
 
+        self.canvas = FigureCanvasTkAgg(f, self)
+        self.canvas.get_tk_widget().grid(column=0,row=0,sticky=(tk.N,tk.W,tk.E,tk.S))
+        
         lb = tk.Button(self, width=10, command=self.__settingsPopup, text="Settings")
-        lb.grid(column=0,row=2)
+        lb.grid(column=0,row=1)
 
         self.draw()
 
@@ -194,12 +198,14 @@ class StatGraph(tk.Frame):
     
     def draw(self):
         self.subplot.clear()
-        self.subplot.axes.get_xaxis().set_visible(False)
+        # self.subplot.axes.get_xaxis().set_visible(False)
         limit = getPacketLimit(self.limit)
         for _, v in enumerate(self.fields):
             values = self.buffer.get(v, limit)
             self.subplot.plot(values)
+        self.subplot.axes.set_xticks([])
         self.subplot.legend(self.fields, loc="upper left")
+        self.subplot.set_xlabel(f"Last {self.limit}")
         self.canvas.draw()
 
     def getSettings(self):
@@ -216,11 +222,13 @@ class StatGraph(tk.Frame):
 class StatGraphContainer(tk.Frame):
     def __init__(self, parent):
         tk.Frame.__init__(self, parent)
+        self["borderwidth"] = 2
+        self["relief"] = "raised"
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
         self.graphs = []
         self.graphFrame = tk.Frame(self)
-        self.graphFrame.grid(column=0,row=0,columnspan=2)
+        self.graphFrame.grid(column=0,row=0,sticky=(tk.N,tk.W,tk.E,tk.S))
         self.graphFrame.rowconfigure(0, weight=1)
 
         buttonFrame = tk.Frame(self)
@@ -230,10 +238,7 @@ class StatGraphContainer(tk.Frame):
         tk.Button(buttonFrame, text="Remove", command=self.removeGraph).grid(column=0,row=0)
         self.addGraph()
 
-    def addGraph(self):
-        # This is so janky
-        # But if we only append a new graph it will be a different size than the rest of the graphs
-        # So instead remove all existing graphs, and recreate them.
+    def __redoGraphs(self):
         gBackup = self.graphs
         self.graphs = []
         for i, g in enumerate(gBackup):
@@ -244,20 +249,56 @@ class StatGraphContainer(tk.Frame):
             graph.setSettings(settings)
             self.graphFrame.columnconfigure(i, weight=1)
             self.graphs.append(graph)
+
+    def __addGraph(self):
         idx = len(self.graphs)
         graph = StatGraph(self.graphFrame, mainBuffer)
         graph.grid(column=idx,row=0,sticky=(tk.N,tk.W,tk.E,tk.S))
         self.graphFrame.columnconfigure(idx, weight=1)
         self.graphs.append(graph)
+
+    def addGraph(self):
+        # This is so janky
+        # But if we only append a new graph it will be a different size than the rest of the graphs
+        # So instead remove all existing graphs, and recreate them.
+        self.__redoGraphs()
+        self.__addGraph()
     
-    def removeGraph(self):
+    def __removeGraph(self):
         idx = len(self.graphs)
+        self.graphFrame.columnconfigure(idx, weight=0)
         graph = self.graphs.pop()
         graph.destroy()
+
+    def removeGraph(self):
+        self.__removeGraph()
+        self.__redoGraphs()
     
     def draw(self):
         for _, graph in enumerate(self.graphs):
             graph.draw()
+    
+    def getSettings(self):
+        settings = []
+        for _, graph in enumerate(self.graphs):
+            settings.append(graph.getSettings())
+        return settings
+    
+    def __setGraphCount(self, count):
+        current = len(self.graphs)
+        while current > count:
+            self.__removeGraph()
+            current -= 1
+        while current < count:
+            self.__addGraph()
+            current += 1
+        self.__redoGraphs()
+
+    def setSettings(self, settings):
+        graphCount = len(settings)
+        self.__setGraphCount(graphCount)
+        for i, set in enumerate(settings):
+            self.graphs[i].setSettings(set)
 
 class StatOverview(tk.Frame):
     def __init__(self, parent, buffer, key):
@@ -315,39 +356,110 @@ class StatOverviewContainer(tk.Frame):
         for _, statView in enumerate(self.statViews):
             statView.draw()
 
-root = tk.Tk()
-
-mainBuffer = RollingBuffer(getPacketLimit("30m"))
-for i in range(0, 100):
-    mainBuffer.add({"RPM":i, "Speed": 100-i})
-
-mainBuffer.add({})
-root.columnconfigure(0, weight=1)
-root.rowconfigure(0,weight=1)
-mainFrame = tk.Frame(root)
-
-mainFrame.grid(column=0,row=0)
-mainFrame.columnconfigure(0, weight=1)
-mainFrame.columnconfigure(1, weight=1)
-mainFrame.rowconfigure(0,weight=1)
-
-graphContainer = StatGraphContainer(mainFrame)
-graphContainer.grid(column=0,row=0)
-so = StatOverviewContainer(mainFrame, mainBuffer)
-so.grid(column=0,row=1)
+def parsePacket(pkt):
+    if pkt[0:3] != "PKT":
+        return None
+    matches = re.findall("([a-zA-Z]+)=([0-9.]+)[;\n]", pkt)
+    values = {}
+    for match in matches:
+        values[match[0]] = float(match[1])
+    return values
 
 i = 0
-
-def test():
+def getDummyData():
     global i
-    mainBuffer.add({"RPM": 1800 * abs(math.sin(i / 10)), "Speed": 30 * abs(math.cos(i / 30)), "Slope": 10 * random.random()})
-    i+= 1
-    graphContainer.draw()
-    so.draw()
-    root.after(expectedPacketDelay, test)
+    i += 1
+    return {
+        "RPM": 1800 * abs(math.sin(i / 10)),
+        "Speed": 30 * abs(math.cos(i / 30)), 
+        "Slope": 10 * random.random(),
+        "BV": 11.8 + random.random() * 0.4,
+    }
 
-# popup = GenericGraphSettingsPopup({})
-# popup.show()
+dummyFileData = None
+def preloadDummyFileData():
+    global dummyFileData
+    dummyFileData = []
+    with open("dummy.txt", "r") as fin:
+        lines = fin.readlines()
+    for l in lines:
+        dummyFileData.append(parsePacket(l))
+preloadDummyFileData()
 
-root.after(expectedPacketDelay, test)
-root.mainloop() 
+
+def getDummyFileData():
+    global i
+    data = dummyFileData[i % len(dummyFileData)]
+    i += 1
+    return data
+
+fileTypes = [("Layout config", "*.config")]
+
+mainBuffer = None
+def main():
+    def loadSettings():
+        fn = filedialog.askopenfilename(filetypes=fileTypes)
+        with open(fn, 'r') as file:
+            content = file.read()
+        j = json.loads(content)
+        graphContainer.setSettings(j["graphs"])
+
+    def saveSettings():
+        fn = filedialog.asksaveasfilename(filetypes=fileTypes)
+        j = {}
+        j["graphs"] = graphContainer.getSettings()
+        with open(fn, 'w') as file:
+            file.write(json.dumps(j))
+    global mainBuffer
+    mainBuffer = RollingBuffer(maxBufferLength)
+    root = tk.Tk()
+    menubar = tk.Menu(root)
+    root.config(menu=menubar)
+
+    filemenu = tk.Menu(menubar, tearoff=False)
+    filemenu.add_command(
+        label="Save Config",
+        command=saveSettings
+    )
+    filemenu.add_command(
+        label="Load Config",
+        command=loadSettings
+    )
+    filemenu.add_command(
+        label="Quit",
+        command=root.destroy
+    )
+    menubar.add_cascade(
+        label="File",
+        menu=filemenu,
+        underline=0
+    )
+
+    root.columnconfigure(0, weight=1)
+    root.rowconfigure(0,weight=1)
+    mainFrame = tk.Frame(root)
+    mainFrame.grid(column=0,row=0)
+    mainFrame.columnconfigure(0, weight=1)
+    mainFrame.rowconfigure(0,weight=1)
+
+    graphContainer = StatGraphContainer(mainFrame)
+    graphContainer.grid(column=0,row=0,sticky=(tk.N,tk.W,tk.E,tk.S))
+    statContainer = StatOverviewContainer(mainFrame, mainBuffer)
+    statContainer.grid(column=0,row=1,sticky=(tk.N,tk.W,tk.E,tk.S))
+
+    def tick():
+        mainBuffer.add(getDummyFileData())
+        statContainer.draw()
+        root.after(expectedPacketDelay, tick)
+
+    def graphDrawTick():
+        graphContainer.draw()
+        root.after(displayRefreshDelay, graphDrawTick)
+
+    root.after(expectedPacketDelay, tick)
+    root.after(displayRefreshDelay, graphDrawTick)
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main()
