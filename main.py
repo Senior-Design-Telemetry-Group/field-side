@@ -357,7 +357,7 @@ class StatOverviewContainer(tk.Frame):
             statView.draw()
 
 def parsePacket(pkt):
-    if pkt[0:3] != "PKT":
+    if pkt[0:5] != "TELEM":
         return None
     matches = re.findall("([a-zA-Z]+)=([0-9.]+)[;\n]", pkt)
     values = {}

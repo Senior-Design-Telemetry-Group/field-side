@@ -8,7 +8,7 @@ delay = 200
 timePerIter = delay / 1000
 
 def pack(data):
-    s = f"PKT{i}"
+    s = f"TELEM{i}"
     for k in data:
         d = data[k]
         s += f";{k}={d:.2f}"
