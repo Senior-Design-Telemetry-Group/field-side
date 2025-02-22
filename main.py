@@ -8,6 +8,8 @@ import math
 import random
 import re
 import json
+import serial
+from threading import Thread
 
 matplotlib.use("TkAgg")
 
@@ -24,12 +26,15 @@ fieldUnits = {
     "BV": "V"
 }
 
+port = "/dev/ttyACM0"
 
 # Not configurable.
 timeOptionLabels = ["1s", "5s", "10s", "15s", "30s", "1m", "5m", "10m", "30m"]
 timeOptionMS = [1000, 5000, 10000, 15000, 30000, 60000, 60000*5, 60000*10, 60000*30]
 maxBufferLength = 60000 * 60 / expectedPacketDelay
 displayRefreshDelay = 200
+
+s = serial.Serial(port, timeout=1)
 
 activePopup = None
 
@@ -148,7 +153,7 @@ class GraphSettingsPopup(tk.Tk):
         self.time = timeCombobox = TimeFrameSelector(self, settings["limit"] or "30m")
         timeCombobox.grid(column=1,row=0)
         self.grab_set()
-        if activePopup:
+        if activePopup and activePopup.winfo_exists():
             activePopup.destroy()
             activePopup = None
         activePopup = self
@@ -365,40 +370,61 @@ def parsePacket(pkt):
         values[match[0]] = float(match[1])
     return values
 
-i = 0
-def getDummyData():
-    global i
-    i += 1
-    return {
-        "RPM": 1800 * abs(math.sin(i / 10)),
-        "Speed": 30 * abs(math.cos(i / 30)), 
-        "Slope": 10 * random.random(),
-        "BV": 11.8 + random.random() * 0.4,
-    }
+# i = 0
+# def getDummyData():
+#     global i
+#     i += 1
+#     return {
+#         "RPM": 1800 * abs(math.sin(i / 10)),
+#         "Speed": 30 * abs(math.cos(i / 30)), 
+#         "Slope": 10 * random.random(),
+#         "BV": 11.8 + random.random() * 0.4,
+#     }
 
-dummyFileData = None
-def preloadDummyFileData():
-    global dummyFileData
-    dummyFileData = []
-    with open("dummy.txt", "r") as fin:
-        lines = fin.readlines()
-    for l in lines:
-        dummyFileData.append(parsePacket(l))
-preloadDummyFileData()
+# dummyFileData = None
+# def preloadDummyFileData():
+#     global dummyFileData
+#     dummyFileData = []
+#     with open("dummy.txt", "r") as fin:
+#         lines = fin.readlines()
+#     for l in lines:
+#         dummyFileData.append(parsePacket(l))
+# preloadDummyFileData()
 
 
-def getDummyFileData():
-    global i
-    data = dummyFileData[i % len(dummyFileData)]
-    i += 1
-    return data
+# def getDummyFileData():
+#     global i
+#     data = dummyFileData[i % len(dummyFileData)]
+#     i += 1
+#     return data
 
 fileTypes = [("Layout config", "*.config")]
 
+running = True
+class AsyncSerial(Thread):
+    def __init__(self,buffer,onpkt):
+        super().__init__()
+        self.buffer = buffer
+        self.onpkt = onpkt
+    
+    def run(self):
+        while running:
+            data = s.readline()
+            try:
+                pkt = parsePacket(data.decode())
+                if pkt:
+                    self.buffer.add(pkt)
+                    self.onpkt()
+            except UnicodeDecodeError as e:
+                pass
+
 mainBuffer = None
+serialThread = None
 def main():
     def loadSettings():
         fn = filedialog.askopenfilename(filetypes=fileTypes)
+        if fn is None:
+            return
         with open(fn, 'r') as file:
             content = file.read()
         j = json.loads(content)
@@ -406,11 +432,14 @@ def main():
 
     def saveSettings():
         fn = filedialog.asksaveasfilename(filetypes=fileTypes)
+        if fn is None:
+            return
         j = {}
         j["graphs"] = graphContainer.getSettings()
         with open(fn, 'w') as file:
             file.write(json.dumps(j))
     global mainBuffer
+    global serialThread
     mainBuffer = RollingBuffer(maxBufferLength)
     root = tk.Tk()
     menubar = tk.Menu(root)
@@ -447,18 +476,24 @@ def main():
     statContainer = StatOverviewContainer(mainFrame, mainBuffer)
     statContainer.grid(column=0,row=1,sticky=(tk.N,tk.W,tk.E,tk.S))
 
-    def tick():
-        mainBuffer.add(getDummyFileData())
-        statContainer.draw()
-        root.after(expectedPacketDelay, tick)
+    # def tick():
+    #     mainBuffer.add(getDummyFileData())
+    #     statContainer.draw()
+    #     root.after(expectedPacketDelay, tick)
 
     def graphDrawTick():
         graphContainer.draw()
         root.after(displayRefreshDelay, graphDrawTick)
 
-    root.after(expectedPacketDelay, tick)
+
+    serialThread = AsyncSerial(mainBuffer, statContainer.draw)
+    serialThread.start()
+    # root.after(expectedPacketDelay, tick)
     root.after(displayRefreshDelay, graphDrawTick)
     root.mainloop()
+    global running
+    running = False
+    serialThread.join()
 
 
 if __name__ == "__main__":
