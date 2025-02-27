@@ -39,7 +39,6 @@ def getDummyData():
         "RPM": sine(t, 1800, 2),
         "Throttle": cosine(t, 100, 1),
         "Speed": sine(t, 30, 1),
-        "Slope": tri(t, 10, 0.5),
         "BV": 11.8 + tri(t, 0.4, 0.25),
     }
 

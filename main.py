@@ -27,6 +27,7 @@ fieldUnits = {
 }
 
 port = "/dev/ttyACM0"
+baudrate = 57600
 
 # Not configurable.
 timeOptionLabels = ["1s", "5s", "10s", "15s", "30s", "1m", "5m", "10m", "30m"]
@@ -34,7 +35,7 @@ timeOptionMS = [1000, 5000, 10000, 15000, 30000, 60000, 60000*5, 60000*10, 60000
 maxBufferLength = 60000 * 60 / expectedPacketDelay
 displayRefreshDelay = 200
 
-s = serial.Serial(port, timeout=1)
+s = serial.Serial(port, baudrate=baudrate)
 
 activePopup = None
 
@@ -364,7 +365,7 @@ class StatOverviewContainer(tk.Frame):
 def parsePacket(pkt):
     if pkt[0:5] != "TELEM":
         return None
-    matches = re.findall("([a-zA-Z]+)=([0-9.]+)[;\n]", pkt)
+    matches = re.findall("([a-zA-Z]+)=(-?[0-9]+.?[0-9]*)[;\n]", pkt)
     values = {}
     for match in matches:
         values[match[0]] = float(match[1])
@@ -410,6 +411,7 @@ class AsyncSerial(Thread):
     def run(self):
         while running:
             data = s.readline()
+            print(data)
             try:
                 pkt = parsePacket(data.decode())
                 if pkt:
