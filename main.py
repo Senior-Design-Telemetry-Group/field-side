@@ -10,6 +10,8 @@ import re
 import json
 import serial
 from threading import Thread
+import time
+import tkintermapview
 
 matplotlib.use("TkAgg")
 
@@ -35,9 +37,11 @@ timeOptionMS = [1000, 5000, 10000, 15000, 30000, 60000, 60000*5, 60000*10, 60000
 maxBufferLength = 60000 * 60 / expectedPacketDelay
 displayRefreshDelay = 200
 
-s = serial.Serial(port, baudrate=baudrate)
-
 activePopup = None
+timeBuffer = None # Buffer to store delay between each packet recieved. Used to calculate average times.
+mainBuffer = None
+serialThread = None
+logInfo = None
 
 def getPacketLimit(option):
     """Get packet # limit when given a selected timeOptionLabel
@@ -365,7 +369,7 @@ class StatOverviewContainer(tk.Frame):
 def parsePacket(pkt):
     if pkt[0:5] != "TELEM":
         return None
-    matches = re.findall("([a-zA-Z]+)=(-?[0-9]+.?[0-9]*)[;\n]", pkt)
+    matches = re.findall("([a-zA-Z]+)=(-?[0-9]+\.?[0-9]*)[;\n]", pkt)
     values = {}
     for match in matches:
         values[match[0]] = float(match[1])
@@ -407,10 +411,17 @@ class AsyncSerial(Thread):
         super().__init__()
         self.buffer = buffer
         self.onpkt = onpkt
+
+    def open(self, port):
+        try:
+            self.s = serial.Serial(port, baudrate=baudrate)
+            return True
+        except serial.serialutil.SerialException:
+            return False
     
     def run(self):
         while running:
-            data = s.readline()
+            data = self.s.readline()
             print(data)
             try:
                 pkt = parsePacket(data.decode())
@@ -420,8 +431,18 @@ class AsyncSerial(Thread):
             except UnicodeDecodeError as e:
                 pass
 
-mainBuffer = None
-serialThread = None
+def log(s):
+    logInfo.insert("end", f"[{time.strftime("%I:%M:%S")}]: {s}\n")
+    logInfo.see("end")
+
+def startSerialThread(callback):
+    serialThread = AsyncSerial(mainBuffer, callback)
+    if not serialThread.open(port):
+        log("Failed to open serial port!")
+        return False
+    serialThread.start()
+    return True
+
 def main():
     def loadSettings():
         fn = filedialog.askopenfilename(filetypes=fileTypes)
@@ -442,6 +463,7 @@ def main():
             file.write(json.dumps(j))
     global mainBuffer
     global serialThread
+    global logInfo
     mainBuffer = RollingBuffer(maxBufferLength)
     root = tk.Tk()
     menubar = tk.Menu(root)
@@ -469,14 +491,34 @@ def main():
     root.columnconfigure(0, weight=1)
     root.rowconfigure(0,weight=1)
     mainFrame = tk.Frame(root)
-    mainFrame.grid(column=0,row=0)
+    mainFrame.grid(column=0,row=0,sticky=(tk.N,tk.W,tk.E,tk.S))
     mainFrame.columnconfigure(0, weight=1)
+    # mainFrame.columnconfigure(1, weight=1)
     mainFrame.rowconfigure(0,weight=1)
 
     graphContainer = StatGraphContainer(mainFrame)
     graphContainer.grid(column=0,row=0,sticky=(tk.N,tk.W,tk.E,tk.S))
-    statContainer = StatOverviewContainer(mainFrame, mainBuffer)
-    statContainer.grid(column=0,row=1,sticky=(tk.N,tk.W,tk.E,tk.S))
+    graphContainer.columnconfigure(0, weight=1)
+    graphContainer.rowconfigure(0,weight=1)
+
+    bottomContainer = tk.Frame(mainFrame)
+    bottomContainer.grid(column=0,row=1,sticky=(tk.N,tk.W,tk.E,tk.S))
+    bottomContainer.columnconfigure(0, weight=1)
+    bottomContainer.rowconfigure(0,weight=1)
+
+    statColumn = tk.Frame(bottomContainer)
+    statColumn.grid(column=0,row=0,sticky=(tk.N,tk.W,tk.E,tk.S))
+    statColumn.columnconfigure(0, weight=1)
+    statColumn.rowconfigure(0,weight=1)
+    statContainer = StatOverviewContainer(statColumn, mainBuffer)
+    statContainer.grid(column=1,row=0,sticky=(tk.N,tk.W,tk.E,tk.S))
+
+    logInfo = tk.Text(statColumn,height=8)
+    logInfo.grid(column=0,row=0,sticky=(tk.N,tk.W,tk.E,tk.S))
+
+    mapWidget = tkintermapview.TkinterMapView(mainFrame, width=500)
+    mapWidget.grid(column=1,row=0,sticky=(tk.N,tk.W,tk.E,tk.S),rowspan=2)
+    mapWidget.set_position(39.789184736877345, -86.23609137045648)
 
     # def tick():
     #     mainBuffer.add(getDummyFileData())
@@ -487,9 +529,7 @@ def main():
         graphContainer.draw()
         root.after(displayRefreshDelay, graphDrawTick)
 
-
-    serialThread = AsyncSerial(mainBuffer, statContainer.draw)
-    serialThread.start()
+    startSerialThread(statContainer.draw)
     # root.after(expectedPacketDelay, tick)
     root.after(displayRefreshDelay, graphDrawTick)
     root.mainloop()
