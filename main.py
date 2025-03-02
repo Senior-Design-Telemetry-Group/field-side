@@ -498,7 +498,7 @@ class AsyncSerial(Thread):
             self.lastPktTime = time.time()
 
 def log(s):
-    logInfo.insert("end", f"[{time.strftime("%I:%M:%S")}]: {s}\n")
+    logInfo.insert("end", f"[{time.strftime('%I:%M:%S')}]: {s}\n")
     logInfo.see("end")
 
 def startSerialThread():
