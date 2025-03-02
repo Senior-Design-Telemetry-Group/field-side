@@ -34,11 +34,10 @@ baudrate = 57600
 # Not configurable.
 timeOptionLabels = ["1s", "5s", "10s", "15s", "30s", "1m", "5m", "10m", "30m"]
 timeOptionMS = [1000, 5000, 10000, 15000, 30000, 60000, 60000*5, 60000*10, 60000*30]
-maxBufferLength = 60000 * 60 / expectedPacketDelay
+maxBufferLength = round(60000 * 60 / expectedPacketDelay)
 displayRefreshDelay = 200
 
 activePopup = None
-timeBuffer = None # Buffer to store delay between each packet recieved. Used to calculate average times.
 mainBuffer = None
 serialThread = None
 logInfo = None
@@ -49,7 +48,10 @@ def getPacketLimit(option):
     if option is None:
         return 0
     idx = timeOptionLabels.index(option)
-    return round(timeOptionMS[idx] / expectedPacketDelay)
+    avg = mainBuffer.getAvg("delta")
+    print("Average")
+    print(avg)
+    return round(timeOptionMS[idx] / avg)
 
 
 class RollingBuffer():
@@ -158,12 +160,14 @@ class GraphSettingsPopup(tk.Tk):
         self.time = timeCombobox = TimeFrameSelector(self, settings["limit"] or "30m")
         timeCombobox.grid(column=1,row=0)
         self.grab_set()
-        if activePopup and activePopup.winfo_exists():
-            activePopup.destroy()
-            activePopup = None
+        try:
+            if activePopup and activePopup.winfo_exists():
+                activePopup.destroy()
+                activePopup = None
+        except tk.TclError:
+            pass
         activePopup = self
     def __saveButton(self):
-        print(self)
         settings = {
             "fields": self.fs.getSelected(),
             "limit": self.time.getLimit()
@@ -411,10 +415,12 @@ class AsyncSerial(Thread):
         super().__init__()
         self.buffer = buffer
         self.onpkt = onpkt
+        self.lastPktTime = time.time()
 
     def open(self, port):
         try:
-            self.s = serial.Serial(port, baudrate=baudrate)
+            self.s = serial.Serial(port, baudrate=baudrate, timeout=1)
+            self.lastPktTime = time.time()
             return True
         except serial.serialutil.SerialException:
             return False
@@ -422,20 +428,25 @@ class AsyncSerial(Thread):
     def run(self):
         while running:
             data = self.s.readline()
-            print(data)
             try:
                 pkt = parsePacket(data.decode())
                 if pkt:
+                    delta = (time.time() - self.lastPktTime) * 1000 # second to ms
+                    if delta < 3*expectedPacketDelay:
+                        # filter outliers
+                        pkt['delta'] = delta
                     self.buffer.add(pkt)
                     self.onpkt()
             except UnicodeDecodeError as e:
                 pass
+            self.lastPktTime = time.time()
 
 def log(s):
     logInfo.insert("end", f"[{time.strftime("%I:%M:%S")}]: {s}\n")
     logInfo.see("end")
 
 def startSerialThread(callback):
+    global serialThread
     serialThread = AsyncSerial(mainBuffer, callback)
     if not serialThread.open(port):
         log("Failed to open serial port!")
@@ -465,6 +476,9 @@ def main():
     global serialThread
     global logInfo
     mainBuffer = RollingBuffer(maxBufferLength)
+    # Initialize time buffer with expected time, to reduce the effect of outliers
+    for i in range(0, 100):
+        mainBuffer.add({"delta": expectedPacketDelay})
     root = tk.Tk()
     menubar = tk.Menu(root)
     root.config(menu=menubar)
