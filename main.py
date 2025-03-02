@@ -32,6 +32,11 @@ fieldUnits = {
 port = "/dev/ttyACM0"
 baudrate = 57600
 
+mapRegions = {
+    "Indianapolis Speedway": [(39.802591, -86.239712), (39.788232, -86.229659)],
+}
+region = "Indianapolis Speedway"
+
 # Not configurable.
 timeOptionLabels = ["1s", "5s", "10s", "15s", "30s", "1m", "5m", "10m", "30m"]
 timeOptionMS = [1000, 5000, 10000, 15000, 30000, 60000, 60000*5, 60000*10, 60000*30]
@@ -182,13 +187,13 @@ class GeneralSettingsPopup(tk.Tk):
     def __init__(self):
         tk.Tk.__init__(self)
         mf = tk.Frame(self)
-        mf["borderwidth"] = 2
-        mf["relief"] = "raised"
         mf.grid(row=0,column=0)
         mf.columnconfigure(0, weight=1)
         mf.rowconfigure(0, weight=1)
 
         serialFrame = tk.Frame(mf)
+        serialFrame["borderwidth"] = 2
+        serialFrame["relief"] = "raised"
         serialFrame.grid(column=0,row=0,sticky=(tk.W,tk.E,tk.N,tk.S))
         serialFrame.rowconfigure(0, weight=1)
         serialFrame.columnconfigure(0, weight=1)
@@ -205,7 +210,17 @@ class GeneralSettingsPopup(tk.Tk):
         connectButton = ttk.Button(serialFrame, text="Connect",command=self.__connect)
         connectButton.grid(column=1,row=1,sticky=(tk.W, tk.E))
 
-        ttk.Button(mf, text="Save", command=self.__save).grid(column=0,row=1,sticky=(tk.W, tk.E))
+        mapSettingFrame = tk.Frame(mf)
+        mapSettingFrame.grid(column=0,row=1,sticky=(tk.W,tk.E,tk.N,tk.S))
+        mapSettingFrame["borderwidth"] = 2
+        mapSettingFrame["relief"] = "raised"
+
+        tk.Label(mapSettingFrame, text="Map Region:", padx=10,pady=10).grid(column=0,row=0)
+        self.mapRegionBox = ttk.Combobox(mapSettingFrame, values=list(mapRegions.keys()))
+        self.mapRegionBox.set(region)
+        self.mapRegionBox.grid(column=1,row=0)
+
+        ttk.Button(mf, text="Save", command=self.__save).grid(column=0,row=2,sticky=(tk.W, tk.E))
 
     def __connect(self):
         global port
@@ -214,10 +229,12 @@ class GeneralSettingsPopup(tk.Tk):
         startSerialThread()
 
     def __save(self):
-        global port
+        global port, region
         value = self.portBox.get()
         port = self.portlookup.get(value) or value
+        region = self.mapRegionBox.get()
         self.destroy()
+        setRegion(region)
 
 class StatGraph(tk.Frame):
     def __init__(self, parent, buffer):
@@ -501,16 +518,26 @@ def startSerialThread():
 def showSettingsMenu():
     settings = GeneralSettingsPopup()
 
+mapWidget = None
+def setRegion(region):
+    selectedRegion = mapRegions[region]
+    mapWidget.fit_bounding_box(selectedRegion[0], selectedRegion[1])
+
 def main():
-    def loadSettings():
-        fn = filedialog.askopenfilename(filetypes=fileTypes)
-        if fn is None:
-            return
+    def loadSettings(fn):
+        global port, region
         with open(fn, 'r') as file:
             content = file.read()
         j = json.loads(content)
         port = j["port"]
+        region = j["region"]
         graphContainer.setSettings(j["graphs"])
+        setRegion(region)
+    def loadSettingsPopup():
+        fn = filedialog.askopenfilename(filetypes=fileTypes)
+        if fn is None:
+            return
+        loadSettings(fn)
 
     def saveSettings():
         fn = filedialog.asksaveasfilename(filetypes=fileTypes)
@@ -519,12 +546,10 @@ def main():
         j = {}
         j["port"] = port
         j["graphs"] = graphContainer.getSettings()
+        j["region"] = region
         with open(fn, 'w') as file:
             file.write(json.dumps(j))
-    global mainBuffer
-    global serialThread
-    global logInfo
-    global statContainer
+    global mainBuffer, serialThread, logInfo, statContainer, mapWidget 
     mainBuffer = RollingBuffer(maxBufferLength)
     # Initialize time buffer with expected time, to reduce the effect of outliers
     for i in range(0, 100):
@@ -544,7 +569,7 @@ def main():
     )
     filemenu.add_command(
         label="Load Config",
-        command=loadSettings
+        command=loadSettingsPopup
     )
     filemenu.add_command(
         label="Quit",
