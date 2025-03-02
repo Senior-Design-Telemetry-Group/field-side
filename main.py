@@ -12,6 +12,7 @@ import serial
 from threading import Thread
 import time
 import tkintermapview
+import serial.tools.list_ports
 
 matplotlib.use("TkAgg")
 
@@ -41,6 +42,7 @@ activePopup = None
 mainBuffer = None
 serialThread = None
 logInfo = None
+statContainer = None
 
 def getPacketLimit(option):
     """Get packet # limit when given a selected timeOptionLabel
@@ -49,8 +51,6 @@ def getPacketLimit(option):
         return 0
     idx = timeOptionLabels.index(option)
     avg = mainBuffer.getAvg("delta")
-    print("Average")
-    print(avg)
     return round(timeOptionMS[idx] / avg)
 
 
@@ -176,6 +176,47 @@ class GraphSettingsPopup(tk.Tk):
         self.exitValue = "Save"
         self.destroy()
     def __quitButton(self):
+        self.destroy()
+
+class GeneralSettingsPopup(tk.Tk):
+    def __init__(self):
+        tk.Tk.__init__(self)
+        mf = tk.Frame(self)
+        mf["borderwidth"] = 2
+        mf["relief"] = "raised"
+        mf.grid(row=0,column=0)
+        mf.columnconfigure(0, weight=1)
+        mf.rowconfigure(0, weight=1)
+
+        serialFrame = tk.Frame(mf)
+        serialFrame.grid(column=0,row=0,sticky=(tk.W,tk.E,tk.N,tk.S))
+        serialFrame.rowconfigure(0, weight=1)
+        serialFrame.columnconfigure(0, weight=1)
+
+        portlist = serial.tools.list_ports.comports()
+        self.portlookup = {}
+        for p in portlist:
+            self.portlookup[str(p)] = p.device
+        tk.Label(serialFrame, text="Serial Port:", padx=10, pady=10).grid(column=0,row=0)
+        self.portBox = ttk.Combobox(serialFrame, values=portlist)
+        self.portBox.set(port)
+        self.portBox.grid(column=1,row=0,padx=10,pady=10)
+
+        connectButton = ttk.Button(serialFrame, text="Connect",command=self.__connect)
+        connectButton.grid(column=1,row=1,sticky=(tk.W, tk.E))
+
+        ttk.Button(mf, text="Save", command=self.__save).grid(column=0,row=1,sticky=(tk.W, tk.E))
+
+    def __connect(self):
+        global port
+        value = self.portBox.get()
+        port = self.portlookup.get(value) or value
+        startSerialThread()
+
+    def __save(self):
+        global port
+        value = self.portBox.get()
+        port = self.portlookup.get(value) or value
         self.destroy()
 
 class StatGraph(tk.Frame):
@@ -411,10 +452,8 @@ fileTypes = [("Layout config", "*.config")]
 
 running = True
 class AsyncSerial(Thread):
-    def __init__(self,buffer,onpkt):
+    def __init__(self):
         super().__init__()
-        self.buffer = buffer
-        self.onpkt = onpkt
         self.lastPktTime = time.time()
 
     def open(self, port):
@@ -435,8 +474,8 @@ class AsyncSerial(Thread):
                     if delta < 3*expectedPacketDelay:
                         # filter outliers
                         pkt['delta'] = delta
-                    self.buffer.add(pkt)
-                    self.onpkt()
+                    mainBuffer.add(pkt)
+                    statContainer.draw()
             except UnicodeDecodeError as e:
                 pass
             self.lastPktTime = time.time()
@@ -445,14 +484,22 @@ def log(s):
     logInfo.insert("end", f"[{time.strftime("%I:%M:%S")}]: {s}\n")
     logInfo.see("end")
 
-def startSerialThread(callback):
+def startSerialThread():
     global serialThread
-    serialThread = AsyncSerial(mainBuffer, callback)
+    if serialThread:
+        log("Serial thread already running!")
+        return
+    serialThread = AsyncSerial()
+    log(port)
     if not serialThread.open(port):
         log("Failed to open serial port!")
+        serialThread = None
         return False
     serialThread.start()
     return True
+
+def showSettingsMenu():
+    settings = GeneralSettingsPopup()
 
 def main():
     def loadSettings():
@@ -462,6 +509,7 @@ def main():
         with open(fn, 'r') as file:
             content = file.read()
         j = json.loads(content)
+        port = j["port"]
         graphContainer.setSettings(j["graphs"])
 
     def saveSettings():
@@ -469,12 +517,14 @@ def main():
         if fn is None:
             return
         j = {}
+        j["port"] = port
         j["graphs"] = graphContainer.getSettings()
         with open(fn, 'w') as file:
             file.write(json.dumps(j))
     global mainBuffer
     global serialThread
     global logInfo
+    global statContainer
     mainBuffer = RollingBuffer(maxBufferLength)
     # Initialize time buffer with expected time, to reduce the effect of outliers
     for i in range(0, 100):
@@ -484,6 +534,10 @@ def main():
     root.config(menu=menubar)
 
     filemenu = tk.Menu(menubar, tearoff=False)
+    filemenu.add_command(
+        label="Edit Settings",
+        command=showSettingsMenu
+    )
     filemenu.add_command(
         label="Save Config",
         command=saveSettings
@@ -543,7 +597,7 @@ def main():
         graphContainer.draw()
         root.after(displayRefreshDelay, graphDrawTick)
 
-    startSerialThread(statContainer.draw)
+    startSerialThread()
     # root.after(expectedPacketDelay, tick)
     root.after(displayRefreshDelay, graphDrawTick)
     root.mainloop()
