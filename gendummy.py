@@ -2,8 +2,8 @@ import random
 import math
 
 i = 0
-count = 100
-delay = 200
+count = 1000
+delay = 50
 
 timePerIter = delay / 1000
 

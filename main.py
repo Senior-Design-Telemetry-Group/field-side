@@ -30,7 +30,9 @@ fieldUnits = {
 }
 
 port = "/dev/ttyACM0"
-baudrate = 57600
+baudrate = 115200
+fieldLoraAddress = 100
+carLoraAddress = 101
 
 mapRegions = {
     "Indianapolis Speedway": [(39.802591, -86.239712), (39.788232, -86.229659)],
@@ -481,9 +483,26 @@ class AsyncSerial(Thread):
         except serial.serialutil.SerialException:
             return False
     
+    def initLora(self):
+        log("Resetting Modem")
+        self.s.write("AT+RESET\r\n".encode())
+        data = self.s.readline()
+        log(data)
+        data = self.s.readline()
+        log(data)
+        log("Setting RF Power")
+        self.s.write("AT+CRFOP=10\r\n".encode())
+        data = self.s.readline()
+        log(data)
+        log("Setting Address")
+        self.s.write(f"AT+ADDRESS={fieldLoraAddress}\r\n".encode())
+        data = self.s.readline()
+        log(data)
+    
     def run(self):
         while running:
             data = self.s.readline()
+            log(data)
             try:
                 pkt = parsePacket(data.decode())
                 if pkt:
@@ -512,6 +531,7 @@ def startSerialThread():
         log("Failed to open serial port!")
         serialThread = None
         return False
+    serialThread.initLora()
     serialThread.start()
     return True
 
