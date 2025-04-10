@@ -29,10 +29,18 @@ fieldUnits = {
     "BV": "V"
 }
 
-port = "/dev/ttyACM0"
+port = "/dev/ttyUSB0"
 baudrate = 115200
 fieldLoraAddress = 100
 carLoraAddress = 101
+
+# *SF7to SF9 at 125kHz, SF7 to SF10 at 250kHz, and SF7 to SF11 at 500kHz
+loraSpreadFactor = 7
+# 7: 125kHz, 8: 250kHz, 9: 500kHz
+loraBW = 9
+# 1: 4/5, 2: 4/6, 3: 4/7, 4: 4/8
+loraCodingRate = 4
+loraPreamble = 12
 
 mapRegions = {
     "Indianapolis Speedway": [(39.802591, -86.239712), (39.788232, -86.229659)],
@@ -433,11 +441,20 @@ class StatOverviewContainer(tk.Frame):
 def parsePacket(pkt):
     if pkt[0:5] != "TELEM":
         return None
-    matches = re.findall("([a-zA-Z]+)=(-?[0-9]+\.?[0-9]*)[;\n]", pkt)
+    matches = re.findall("([a-zA-Z]+)=(-?[0-9]+\\.?[0-9]*)[;\n]", pkt)
     values = {}
     for match in matches:
         values[match[0]] = float(match[1])
     return values
+
+def parseLoraPacket(pkt):
+    if pkt[0:5] != "+RCV=":
+        return None
+    idx = pkt.find("TELEM")
+    if idx == -1:
+        return None
+    return parsePacket(pkt[idx:])
+
 
 # i = 0
 # def getDummyData():
@@ -498,13 +515,17 @@ class AsyncSerial(Thread):
         self.s.write(f"AT+ADDRESS={fieldLoraAddress}\r\n".encode())
         data = self.s.readline()
         log(data)
+        log("Setting Parameters")
+        self.s.write(f"AT+PARAMETER={loraSpreadFactor},{loraBW},{loraCodingRate},{loraPreamble}\r\n".encode())
+        data = self.s.readline()
+        log(data)
     
     def run(self):
         while running:
             data = self.s.readline()
             log(data)
             try:
-                pkt = parsePacket(data.decode())
+                pkt = parseLoraPacket(data.decode())
                 if pkt:
                     delta = (time.time() - self.lastPktTime) * 1000 # second to ms
                     if delta < 3*expectedPacketDelay:
