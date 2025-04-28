@@ -17,9 +17,20 @@ import serial.tools.list_ports
 matplotlib.use("TkAgg")
 
 # Configurable Settings
-expectedPacketDelay = 200
+expectedPacketDelay = 50
 
-expectedFields = ["FUEL", "RPM", "Speed", "Slope", "BV", "Throttle", "OXY", "INJ"]
+expectedFields = [
+    "FUEL", 
+    "RPM", 
+    "Speed", 
+    "Slope", 
+    "BV", 
+    "Throttle", 
+    "OXY", 
+    "INJ",
+    "LAT",
+    "LON"
+]
 fieldUnits = {
     "FUEL": "MPG",
     "RPM": "RPM",
@@ -44,6 +55,7 @@ loraPreamble = 12
 
 mapRegions = {
     "Indianapolis Speedway": [(39.802591, -86.239712), (39.788232, -86.229659)],
+    "Burke": [(42.119826,-79.980805), (42.118107,-79.979292)]
 }
 region = "Indianapolis Speedway"
 
@@ -532,6 +544,8 @@ class AsyncSerial(Thread):
                         # filter outliers
                         pkt['delta'] = delta
                     mainBuffer.add(pkt)
+                    if pkt.get("LAT"):
+                        logPosition(pkt.get("LAT"), pkt.get("LON"))
                     statContainer.draw()
             except UnicodeDecodeError as e:
                 pass
@@ -560,9 +574,36 @@ def showSettingsMenu():
     settings = GeneralSettingsPopup()
 
 mapWidget = None
+mapPath = None
+positionLog = []
 def setRegion(region):
     selectedRegion = mapRegions[region]
     mapWidget.fit_bounding_box(selectedRegion[0], selectedRegion[1])
+
+def convertNmeaToDecimal(nmea_value):
+    sign = -1 if nmea_value < 0 else 1
+    abs_value = abs(nmea_value)
+
+    degrees = int(abs_value // 100)
+    minutes = abs_value - (degrees * 100)
+    decimal = degrees + (minutes / 60)
+
+    return sign * decimal
+
+def logPosition(lat, lon):
+    global mapPath
+    lat = convertNmeaToDecimal(lat)
+    lon = -convertNmeaToDecimal(lon)
+    positionLog.append((lat,lon))
+    if mapPath is None:
+        if len(positionLog) > 3:
+            mapPath = mapWidget.set_path(positionLog)
+            root.update()
+    else:
+        # mapPath.set_position_list(positionLog)
+        # pass
+        mapPath.add_position(lat,lon)
+        root.update()
 
 def main():
     def loadSettings(fn):
@@ -590,7 +631,7 @@ def main():
         j["region"] = region
         with open(fn, 'w') as file:
             file.write(json.dumps(j))
-    global mainBuffer, serialThread, logInfo, statContainer, mapWidget 
+    global mainBuffer, serialThread, logInfo, statContainer, mapWidget, mapPath, root
     mainBuffer = RollingBuffer(maxBufferLength)
     # Initialize time buffer with expected time, to reduce the effect of outliers
     for i in range(0, 100):
