@@ -5,7 +5,6 @@ import tkinter as tk
 from tkinter import filedialog
 from tkinter import ttk 
 import math
-import random
 import re
 import json
 import serial
@@ -543,9 +542,13 @@ class AsyncSerial(Thread):
                     if delta < 3*expectedPacketDelay:
                         # filter outliers
                         pkt['delta'] = delta
-                    mainBuffer.add(pkt)
                     if pkt.get("LAT"):
                         logPosition(pkt.get("LAT"), pkt.get("LON"))
+                    if pkt.get("ACCZ") and pkt.get("ACCX"):
+                        z = pkt.get("ACCZ")
+                        x = pkt.get("ACCX")
+                        pkt["Slope"] = -math.degrees(math.atan2(z, -x))
+                    mainBuffer.add(pkt)
                     statContainer.draw()
             except UnicodeDecodeError as e:
                 pass
@@ -595,15 +598,11 @@ def logPosition(lat, lon):
     lat = convertNmeaToDecimal(lat)
     lon = -convertNmeaToDecimal(lon)
     positionLog.append((lat,lon))
-    if mapPath is None:
-        if len(positionLog) > 3:
-            mapPath = mapWidget.set_path(positionLog)
-            root.update()
-    else:
-        # mapPath.set_position_list(positionLog)
-        # pass
-        mapPath.add_position(lat,lon)
-        root.update()
+    if len(positionLog) > 3:
+        mapPath = mapWidget.set_path(positionLog)
+        mapWidget.update()
+        mapWidget.update_idletasks()
+        positionLog.pop(0)
 
 def main():
     def loadSettings(fn):
@@ -631,7 +630,7 @@ def main():
         j["region"] = region
         with open(fn, 'w') as file:
             file.write(json.dumps(j))
-    global mainBuffer, serialThread, logInfo, statContainer, mapWidget, mapPath, root
+    global mainBuffer, serialThread, logInfo, statContainer, mapWidget, mapPath, root, mainFrame
     mainBuffer = RollingBuffer(maxBufferLength)
     # Initialize time buffer with expected time, to reduce the effect of outliers
     for i in range(0, 100):
